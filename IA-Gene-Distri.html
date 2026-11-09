@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Star Defender 3D - IA Generativa & Distributiva</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            user-select: none;
+        }
+        #hud {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            color: #fff;
+            z-index: 10;
+            background: rgba(15, 23, 42, 0.9);
+            padding: 15px;
+            border-radius: 12px;
+            border: 1px solid #38bdf8;
+            backdrop-filter: blur(8px);
+            width: 280px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6);
+        }
+        h1 { margin: 0 0 5px 0; font-size: 16px; color: #38bdf8; }
+        .stat { margin: 4px 0; font-size: 12px; font-family: monospace; color: #cbd5e1; }
+        .bar-bg { width: 100%; background: #334155; height: 10px; border-radius: 5px; overflow: hidden; margin-top: 2px; }
+        .bar-fill { height: 100%; background: #10b981; width: 100%; transition: width 0.2s; }
+        
+        .btn-group { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+        button {
+            width: 100%;
+            color: white;
+            border: none;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: transform 0.1s, opacity 0.2s;
+        }
+        button:hover { opacity: 0.9; }
+        button:active { transform: scale(0.97); }
+
+        .btn-gen { background: linear-gradient(135deg, #0284c7, #2563eb); }
+        .btn-dist { background: linear-gradient(135deg, #0d9488, #10b981); }
+        .btn-restart { background: linear-gradient(135deg, #dc2626, #991b1b); }
+
+        #controls-hint {
+            position: absolute;
+            bottom: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #f8fafc;
+            font-size: 13px;
+            background: rgba(15, 23, 42, 0.85);
+            padding: 8px 18px;
+            border-radius: 20px;
+            border: 1px solid #334155;
+            pointer-events: none;
+        }
+
+        #game-over {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(15, 23, 42, 0.95);
+            padding: 30px;
+            border-radius: 15px;
+            border: 2px solid #ef4444;
+            text-align: center;
+            color: white;
+            z-index: 20;
+            width: 260px;
+        }
+    </style>
+    <!-- Motor Three.js 3D -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="hud">
+        <h1>🌌 Laboratorio IA 3D</h1>
+        <div class="stat">Puntuación: <span id="score-text" style="color:#f59e0b; font-weight:bold;">0</span></div>
+        <div class="stat">Escudo de Nave:</div>
+        <div class="bar-bg"><div id="hp-bar" class="bar-fill"></div></div>
+        
+        <div class="stat" id="seed-info" style="margin-top:8px; font-size:11px; color:#94a3b8;">Sistema: Iniciando...</div>
+        <div class="stat" id="enemy-info" style="font-size:11px; color:#38bdf8;">Red IA: Inactiva</div>
+
+        <div class="btn-group">
+            <button id="btn-ia-gen" class="btn-ia btn-gen">✨ APLICAR IA GENERATIVA</button>
+            <button id="btn-ia-dist" class="btn-ia btn-dist">🌐 ACTIVAR IA DISTRIBUTIVA</button>
+        </div>
+    </div>
+
+    <div id="controls-hint">
+        <strong>Mover Nave:</strong> [W][A][S][D] / Flechas | <strong>Disparar:</strong> [Espacio]
+    </div>
+
+    <div id="game-over">
+        <h2 style="color:#ef4444; margin-top:0;">¡NAVE DESTRUIDA!</h2>
+        <p style="font-size:13px; color:#94a3b8;">Los sistemas de la nave han colapsado.</p>
+        <button id="btn-restart" class="btn-restart">REINTENTAR MISIÓN</button>
+    </div>
+
+<script>
+    // --- EFECTOS DE SONIDO SINTETIZADOS ---
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playSound(type) {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        let osc = audioCtx.createOscillator();
+        let gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        
+        let now = audioCtx.currentTime;
+        if (type === 'laser') {
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(700, now);
+            osc.frequency.exponentialRampToValueAtTime(100, now + 0.12);
+            gain.gain.setValueAtTime(0.08, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+            osc.start(now); osc.stop(now + 0.12);
+        } else if (type === 'hit') {
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(120, now);
+            osc.frequency.exponentialRampToValueAtTime(20, now + 0.18);
+            gain.gain.setValueAtTime(0.15, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
+            osc.start(now); osc.stop(now + 0.18);
+        } else if (type === 'gen') {
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(300, now);
+            osc.frequency.exponentialRampToValueAtTime(800, now + 0.3);
+            gain.gain.setValueAtTime(0.1, now);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.3);
+            osc.start(now); osc.stop(now + 0.3);
+        }
+    }
+
+    // --- ESCENA 3D Y CONFIGURACIÓN ---
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+    scene.add(ambientLight);
+    const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    mainLight.position.set(20, 50, 20);
+    scene.add(mainLight);
+
+    // --- ESTADO DEL JUEGO ---
+    let score = 0;
+    let hp = 100;
+    let gameOver = false;
+    let modoDistributivo = false;
+
+    // --- NAVE DEL JUGADOR ---
+    const shipGroup = new THREE.Group();
+    const bodyGeo = new THREE.ConeGeometry(0.7, 2.5, 6);
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, metalness: 0.8, roughness: 0.2 });
+    const body = new THREE.Mesh(bodyGeo, bodyMat);
+    body.rotation.x = Math.PI / 2;
+    shipGroup.add(body);
+
+    const wingGeo = new THREE.BoxGeometry(2.5, 0.08, 0.8);
+    const wingMat = new THREE.MeshStandardMaterial({ color: 0x0284c7, metalness: 0.6 });
+    const wings = new THREE.Mesh(wingGeo, wingMat);
+    wings.position.set(0, 0, 0.3);
+    shipGroup.add(wings);
+
+    scene.add(shipGroup);
+    shipGroup.position.set(0, 3, 0);
+
+    // Colecciones de entidades
+    let laserList = [];
+    let enemyList = [];
+    let networkLines = [];
+    let terrainMesh = null;
+    let seedActual = 12345;
+
+    // --- 1. LÓGICA DE IA GENERATIVA ---
+    function ejecutarIAGenerativa() {
+        playSound('gen');
+        seedActual = Math.floor(Math.random() * 99999);
+        const hue = Math.random();
+
+        // Regenerar terreno 3D procedural
+        if (terrainMesh) scene.remove(terrainMesh);
+        const geo = new THREE.PlaneGeometry(300, 300, 35, 35);
+        geo.rotateX(-Math.PI / 2);
+        const pos = geo.attributes.position;
+        for (let i = 0; i < pos.count; i++) {
+            let x = pos.getX(i);
+            let z = pos.getZ(i);
+            let y = Math.sin(x * 0.05 + seedActual) * 6 + Math.cos(z * 0.05 + seedActual) * 6;
+            pos.setY(i, y - 12);
+        }
+        geo.computeVertexNormals();
+
+        const terrainColor = new THREE.Color().setHSL(hue, 0.6, 0.2);
+        const skyColor = new THREE.Color().setHSL((hue + 0.5) % 1, 0.7, 0.05);
+        scene.background = skyColor;
+        scene.fog = new THREE.FogExp2(skyColor, 0.012);
+
+        const mat = new THREE.MeshStandardMaterial({ color: terrainColor, roughness: 0.8, flatShading: true });
+        terrainMesh = new THREE.Mesh(geo, mat);
+        scene.add(terrainMesh);
+
+        // Generar nuevos tipos de enemigos con geometrías aleatorias
+        limpiarEnemigos();
+        const colorEnemigo = new THREE.Color().setHSL((hue + 0.3) % 1, 0.9, 0.5);
+
+        for (let i = 0; i < 7; i++) {
+            crearEnemigoProcedural(colorEnemigo);
+        }
+
+        document.getElementById('seed-info').innerText = `Planeta Seed: #${seedActual}`;
+    }
+
+    function crearEnemigoProcedural(color) {
+        const eGroup = new THREE.Group();
+        
+        let eGeo;
+        let tipoRnd = Math.random();
+        if (tipoRnd < 0.33) eGeo = new THREE.OctahedronGeometry(1.2);
+        else if (tipoRnd < 0.66) eGeo = new THREE.BoxGeometry(1.3, 1.3, 1.3);
+        else eGeo = new THREE.TorusGeometry(0.8, 0.3, 8, 16);
+
+        const eMat = new THREE.MeshStandardMaterial({ color: color, metalness: 0.7, roughness: 0.3 });
+        const mesh = new THREE.Mesh(eGeo, eMat);
+        eGroup.add(mesh);
+
+        const eLight = new THREE.PointLight(color, 1, 6);
+        eGroup.add(eLight);
+
+        eGroup.position.set(
+            (Math.random() - 0.5) * 35,
+            2 + Math.random() * 8,
+            shipGroup.position.z - 40 - Math.random() * 40
+        );
+
+        scene.add(eGroup);
+        enemyList.push({
+            mesh: eGroup,
+            speed: 0.12 + Math.random() * 0.12,
+            rotSpeed: (Math.random() - 0.5) * 0.04,
+            baseX: eGroup.position.x
+        });
+    }
+
+    function limpiarEnemigos() {
+        enemyList.forEach(e => scene.remove(e.mesh));
+        enemyList = [];
+        limpiarLineasRed();
+    }
+
+    // --- 2. LÓGICA DE IA DISTRIBUTIVA ---
+    function toggleIADistributiva() {
+        modoDistributivo = !modoDistributivo;
+        playSound('gen');
+        
+        const btnDist = document.getElementById('btn-ia-dist');
+        const info = document.getElementById('enemy-info');
+
+        if (modoDistributivo) {
+            btnDist.innerText = "🌐 DESACTIVAR IA DISTRIBUTIVA";
+            btnDist.style.background = "linear-gradient(135deg, #eab308, #ca8a04)";
+            info.innerText = "Red IA: Sincronizada (Enjambre)";
+            info.style.color = "#10b981";
+        } else {
+            btnDist.innerText = "🌐 ACTIVAR IA DISTRIBUTIVA";
+            btnDist.style.background = "linear-gradient(135deg, #0d9488, #10b981)";
+            info.innerText = "Red IA: Inactiva";
+            info.style.color = "#38bdf8";
+            limpiarLineasRed();
+        }
+    }
+
+    function limpiarLineasRed() {
+        networkLines.forEach(l => scene.remove(l));
+        networkLines = [];
+    }
+
+    function actualizarRedDistribuida() {
+        limpiarLineasRed();
+        if (!modoDistributivo || enemyList.length < 2) return;
+
+        const materialLinea = new THREE.LineBasicMaterial({ color: 0x10b981, transparent: true, opacity: 0.6 });
+
+        for (let i = 0; i < enemyList.length; i++) {
+            for (let j = i + 1; j < enemyList.length; j++) {
+                let p1 = enemyList[i].mesh.position;
+                let p2 = enemyList[j].mesh.position;
+
+                // Si están a cierta distancia, conectan y distribuyen comportamiento
+                if (p1.distanceTo(p2) < 25) {
+                    const geoLinea = new THREE.BufferGeometry().setFromPoints([p1, p2]);
+                    const linea = new THREE.Line(geoLinea, materialLinea);
+                    scene.add(linea);
+                    networkLines.push(linea);
+
+                    // Movimiento coordinado tipo enjambre en red
+                    enemyList[i].mesh.position.x = enemyList[i].baseX + Math.sin(Date.now() * 0.003) * 4;
+                    enemyList[j].mesh.position.x = enemyList[j].baseX + Math.sin(Date.now() * 0.003 + 1) * 4;
+                }
+            }
+        }
+    }
+
+    // --- CONTROLES DE TECLADO Y DISPARO ---
+    const keys = {};
+    window.addEventListener('keydown', e => {
+        keys[e.code] = true;
+        // Evitar que la barra espaciadora active botones del HTML por foco
+        if (e.code === 'Space') {
+            e.preventDefault();
+            if (!gameOver) dispararLaser();
+        }
+    });
+    window.addEventListener('keyup', e => keys[e.code] = false);
+
+    function dispararLaser() {
+        playSound('laser');
+        const lGeo = new THREE.CylinderGeometry(0.08, 0.08, 2);
+        lGeo.rotateX(Math.PI / 2);
+        const lMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+        const laser = new THREE.Mesh(lGeo, lMat);
+
+        laser.position.copy(shipGroup.position);
+        laser.position.z -= 1.5;
+        scene.add(laser);
+        laserList.push(laser);
+    }
+
+    // --- LOOP DE FÍSICAS Y JUEGO ---
+    function update() {
+        if (gameOver) return;
+
+        // Movimiento de la Nave
+        if ((keys['KeyA'] || keys['ArrowLeft']) && shipGroup.position.x > -18) shipGroup.position.x -= 0.3;
+        if ((keys['KeyD'] || keys['ArrowRight']) && shipGroup.position.x < 18) shipGroup.position.x += 0.3;
+        if ((keys['KeyW'] || keys['ArrowUp']) && shipGroup.position.y < 12) shipGroup.position.y += 0.2;
+        if ((keys['KeyS'] || keys['ArrowDown']) && shipGroup.position.y > 1) shipGroup.position.y -= 0.2;
+
+        shipGroup.position.z -= 0.2;
+        if (terrainMesh) terrainMesh.position.z = shipGroup.position.z - 50;
+
+        camera.position.set(shipGroup.position.x, shipGroup.position.y + 3, shipGroup.position.z + 9);
+        camera.lookAt(shipGroup.position.x, shipGroup.position.y, shipGroup.position.z - 10);
+
+        // Mover Disparos
+        laserList.forEach((laser, index) => {
+            laser.position.z -= 1.2;
+            if (laser.position.z < shipGroup.position.z - 100) {
+                scene.remove(laser);
+                laserList.splice(index, 1);
+            }
+        });
+
+        // Mover Enemigos
+        enemyList.forEach((enemy, eIndex) => {
+            enemy.mesh.position.z += enemy.speed;
+            enemy.mesh.rotation.x += enemy.rotSpeed;
+            enemy.mesh.rotation.y += enemy.rotSpeed;
+
+            // Colisión Láser vs Enemigo
+            laserList.forEach((laser, lIndex) => {
+                if (laser.position.distanceTo(enemy.mesh.position) < 2.0) {
+                    playSound('hit');
+                    scene.remove(enemy.mesh);
+                    scene.remove(laser);
+                    enemyList.splice(eIndex, 1);
+                    laserList.splice(lIndex, 1);
+                    
+                    score += 100;
+                    document.getElementById('score-text').innerText = score;
+
+                    crearEnemigoProcedural(new THREE.Color(0xff2255));
+                }
+            });
+
+            // Colisión Enemigo vs Nave
+            if (enemy.mesh.position.distanceTo(shipGroup.position) < 2.2) {
+                playSound('hit');
+                scene.remove(enemy.mesh);
+                enemyList.splice(eIndex, 1);
+                
+                hp -= 25;
+                document.getElementById('hp-bar').style.width = Math.max(0, hp) + '%';
+                if (hp <= 0) {
+                    gameOver = true;
+                    document.getElementById('game-over').style.display = 'block';
+                }
+            }
+
+            // Reciclar enemigo si pasa de largo
+            if (enemy.mesh.position.z > shipGroup.position.z + 10) {
+                enemy.mesh.position.z = shipGroup.position.z - 60;
+                enemy.mesh.position.x = (Math.random() - 0.5) * 35;
+                enemy.baseX = enemy.mesh.position.x;
+            }
+        });
+
+        actualizarRedDistribuida();
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+        update();
+        renderer.render(scene, camera);
+    }
+
+    function reiniciarJuego() {
+        hp = 100;
+        score = 0;
+        gameOver = false;
+        document.getElementById('hp-bar').style.width = '100%';
+        document.getElementById('score-text').innerText = '0';
+        document.getElementById('game-over').style.display = 'none';
+        shipGroup.position.set(0, 3, 0);
+        ejecutarIAGenerativa();
+    }
+
+    // --- VINCULACIÓN DIRECTA DE BOTONES POR EVENT LISTENERS ---
+    document.getElementById('btn-ia-gen').addEventListener('click', (e) => {
+        e.target.blur(); // Quitar foco para evitar disparo por espacio
+        ejecutarIAGenerativa();
+    });
+
+    document.getElementById('btn-ia-dist').addEventListener('click', (e) => {
+        e.target.blur();
+        toggleIADistributiva();
+    });
+
+    document.getElementById('btn-restart').addEventListener('click', (e) => {
+        e.target.blur();
+        reiniciarJuego();
+    });
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    // Iniciar juego al cargar
+    ejecutarIAGenerativa();
+    animate();
+</script>
+</body>
+</html>
